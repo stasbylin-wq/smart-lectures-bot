@@ -3,16 +3,17 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
-from google import genai
+import google.generativeai as genai
 
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
 TELEGRAM_TOKEN = "8825868450:AAGWSwOtKu2ZWWGpDzdVkoRNBnfMcFms0x4"
 GROQ_API_KEY = "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"
 GEMINI_API_KEY = "AQ.Ab8RN6LTHndhLop7DD2SFCl294X-g9BU5lVIKwddOcCtiF5-uw"
-
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Классическая и стабильная конфигурация Google ИИ
+genai.configure(api_key=GEMINI_API_KEY)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -41,10 +42,10 @@ def handle_audio(message):
         
         bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Google Gemini для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: Мощная Gemini Flash делает подробнейший конспект БЕЗ ОГРАНИЧЕНИЙ НА ВЫВОД СИМВОЛОВ
-        response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=f"Ты — профессиональный студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, важные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции. Вот текст лекции:\n\n{transcription}"
+        # 🧠 ЭТАП 2: Супер-стабильная модель Gemini 1.5 Flash делает конспект без лимитов
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            f"Ты — professional студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, важные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции. Вот текст лекции:\n\n{transcription}"
         )
         
         result_text = response.text
@@ -54,7 +55,7 @@ def handle_audio(message):
         except:
             pass
         
-        # Разрезаем сообщение для Telegram без капризного Markdown, чтобы избежать ошибок разметки
+        # Разрезаем сообщение для Telegram, если конспект получился очень большим (лимит TG 4096 символов)
         if len(result_text) > 4000:
             for x in range(0, len(result_text), 4000):
                 bot.send_message(message.chat.id, result_text[x:x+4000])
