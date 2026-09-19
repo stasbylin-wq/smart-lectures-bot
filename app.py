@@ -2,7 +2,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
-import requests
+from groq import Groq
 
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
 TELEGRAM_TOKEN = "8825868450:AAGWSwOtKu2ZWWGpDzdVkoRNBnfMcFms0x4"
@@ -11,11 +11,12 @@ MISTRAL_API_KEY = "fXu4rBD2v6iRNHbKTI6GrXuIQvFy7o9n"
 
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
     try:
-        status_msg = bot.send_message(message.chat.id, "⏳ Файл лекции успешно получен! Скачиваю аудио и отправляю на ИИ-расшифровку Whisper...")
+        status_msg = bot.reply_to(message, "⏳ Файл лекции успешно получен! Скачиваю аудио и отправляю ИИ Whisper на расшифровку...")
         
         file_id = None
         if message.content_type == 'audio': file_id = message.audio.file_id
@@ -29,69 +30,40 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
-        # 🎙️ ЭТАП 1: Groq Whisper переводит звук в текст без лишних библиотек
-        whisper_url = "https://groq.com"
-        whisper_headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-        
         with open(file_name, "rb") as audio_file:
-            whisper_files = {
-                "file": (file_name, audio_file.read(), "audio/mp3"),
-                "model": (None, "whisper-large-v3"),
-                "response_format": (None, "text")
-            }
-            whisper_response = requests.post(whisper_url, headers=whisper_headers, files=whisper_files)
-            
-        transcription = whisper_response.text.strip()
+            transcription = groq_client.audio.transcriptions.create(
+                file=(file_name, audio_file.read()),
+                model="whisper-large-v3",
+                response_format="text"
+            )
         
-        if whisper_response.status_code != 200 or not transcription:
-            raise Exception(f"Ошибка Whisper (Groq): {whisper_response.text}")
-            
-        bot.edit_message_text("✍️ Речь успешно переведена в текст! Передаю данные в ИИ Claude для создания цельного конспекта без лимитов...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Речь успешно переведена в текст! Нейросеть формирует красивый конспект...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: ДРУГОЙ ИИ (Claude-3-Haiku) делает подробнейший конспект БЕЗ ЛИМИТОВ И БЕЗ КЛЮЧЕЙ
-        claude_url = "https://chateverywhere.app"
-        claude_headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        prompt_content = (
-            "Ты — профессиональный студенческий ассистент. Перед тобой полная расшифровка учебной лекции. "
-            "Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. "
-            "Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, "
-            "главные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь "
-            f"краткое резюме (Summary) всей лекции. Вот текст лекции:\n\n{transcription}"
+        # 🔥 УМНАЯ ЗАЩИТА: Берем первые 5000 символов текста лекции, чтобы гарантированно уложиться в лимиты бесплатного тарифа
+        safe_transcription = transcription[:5000]
+        
+        completion = groq_client.chat.completions.create(
+            model="groq/compound",
+            messages=[
+                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект на русском языке. СТРОГО ЗАПРЕЩЕНО писать длинные тексты и лить воду. Твой итоговый ответ должен быть объемом НЕ БОЛЕЕ 3000 символов. Выдели тему лекции, разбей текст на короткие логические главы, главные термины выдели жирным шрифтом, а важные списки оформи буллитами. Уложись в этот лимит при любых обстоятельствах!"},
+                {"role": "user", "content": f"Вот текст лекции для сжатого конспекта:\n\n{safe_transcription}"}
+            ]
         )
-        claude_data = {
-            "model": "claude-3-haiku",
-            "messages": [{"role": "user", "content": prompt_content}]
-        }
         
-        claude_response = requests.post(claude_url, headers=claude_headers, json=claude_data)
-        
-        # Если открытый хаб временно перегружен, используем запасной резервный ИИ-канал, чтобы бот никогда не падал
-        if claude_response.status_code != 200:
-            result_text = f"📝 **СОКРАЩЕННЫЙ ВАРИАНТ ТЕКСТА** 📝\n\n{transcription[:3000]}"
-        else:
-            result_text = claude_response.text.strip()
+        result_text = completion.choices.message.content
         
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
-        
-        # Разрезаем сообщение для Telegram, если конспект получился огромным
-        if len(result_text) > 4000:
-            for x in range(0, len(result_text), 4000):
-                bot.send_message(message.chat.id, result_text[x:x+4000])
-        else:
-            bot.send_message(message.chat.id, f"📚 **ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ (Claude ИИ)** 📚\n\n{result_text}")
             
+        bot.send_message(message.chat.id, f"📚 **КОНСПЕКТ ЛЕКЦИИ (ТЕСТОВЫЙ ФРАГМЕНТ)** 📚\n\n{result_text}", parse_mode="Markdown")
         os.remove(file_name)
         
     except Exception as e:
         bot.reply_to(message, f"❌ Произошла ошибка во время обработки лекции: {str(e)}")
 
-# Сервер для удержания Render тарифа Free
+# Заглушка веб-сервера для бесплатного тарифа Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
