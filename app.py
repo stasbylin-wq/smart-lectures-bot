@@ -3,8 +3,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
-from mistralai import Mistral
-
+import requests
 
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
 TELEGRAM_TOKEN = "8825868450:AAGWSwOtKu2ZWWGpDzdVkoRNBnfMcFms0x4"
@@ -13,7 +12,6 @@ MISTRAL_API_KEY = "fXu4rBD2v6iRNHbKTI6GrXuIQvFy7o9n"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-mistral_client = Mistral(api_key=MISTRAL_API_KEY)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -42,16 +40,23 @@ def handle_audio(message):
         
         bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Mistral AI для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: Мощная модель Mistral Large делает подробнейший конспект
-        response = mistral_client.chat.complete(
-            model="mistral-large-latest",
-            messages=[
+        # 🧠 ЭТАП 2: Запрос к Mistral напрямую через встроенную библиотеку requests без лимитов на вывод
+        url = "https://mistral.ai"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {MISTRAL_API_KEY}"
+        }
+        data = {
+            "model": "mistral-large-latest",
+            "messages": [
                 {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, главные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции."},
                 {"role": "user", "content": f"Вот текст лекции:\n\n{transcription}"}
             ]
-        )
+        }
         
-        result_text = response.choices[0].message.content
+        response = requests.post(url, headers=headers, json=data)
+        response_json = response.json()
+        result_text = response_json["choices"][0]["message"]["content"]
         
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
