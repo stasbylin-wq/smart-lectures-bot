@@ -1,6 +1,7 @@
 
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
@@ -11,6 +12,24 @@ GROQ_API_KEY = "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"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+def split_text(text, max_chars=3000):
+    """Функция автоматической нарезки текста для обхода секундных и минутных лимитов Groq"""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for word in words:
+        if current_length + len(word) + 1 > max_chars:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word)
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    return chunks
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -29,35 +48,51 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
+        # ТУТ СТРОГО СЛУШАЕТ WHISPER
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
-                model="groq/compound-mini",
+                model="whisper-large-v3",
                 response_format="text"
             )
         
-        bot.edit_message_text("✍️ Речь успешно переведена в текст! Нейросеть формирует емкий конспект, укладываясь в лимиты...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Речь успешно переведена в текст! Обхожу лимиты Groq и формирую конспект...", message.chat.id, status_msg.message_id)
         
-        # Модель groq/compound с твоей жесткой инструкцией сжатия текста
-        completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[
-                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект на русском языке. СТРОГО ЗАПРЕЩЕНО писать длинные тексты и лить воду. Твой итоговый ответ должен быть объемом НЕ БОЛЕЕ 3000 символов. Выдели тему лекции, разбей текст на короткие логические главы, главные термины выдели жирным шрифтом, а важные списки оформи короткими буллитами. Уложись в этот лимит при любых обстоятельствах!"},
-                {"role": "user", "content": f"Вот текст лекции для сжатого конспекта:\n\n{transcription}"}
-            ]
-        )
+        # Режем огромную лекцию на безопасные части по 3000 символов
+        text_chunks = split_text(transcription, max_chars=3000)
+        final_notes = []
         
-        # Исправленный синтаксис получения ответа Groq
-        result_text = completion.choices[0].message.content
+        for i, chunk in enumerate(text_chunks):
+            # ТУТ СТРОГО КОНСПЕКТИРУЕТ COMPOUND КУСОЧКАМИ
+            completion = groq_client.chat.completions.create(
+                model="groq/compound",
+                messages=[
+                    {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой кусок расшифровки учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект этой части на русском языке. Убирай заикания лектора и воду. Главные термины выдели жирным шрифтом, а важные списки оформи короткими буллитами."},
+                    {"role": "user", "content": f"Сделай конспект для части {i+1}:\n\n{chunk}"}
+                ]
+            )
+            final_notes.append(completion.choices.message.content)
+            # Пауза 4 секунды между запросами, чтобы обнулился минутный лимит (TPM)
+            time.sleep(4)
+            
+        # Соединяем конспект воедино
+        result_text = f"📚 **ИДЕАЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n" + "\n\n".join(final_notes)
         
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+        
+        # Защита от лимита длины сообщения самого Telegram
+        if len(result_text) > 4000:
+            for x in range(0, len(result_text), 4000):
+                bot.send_message(message.chat.id, result_text[x:x+4000], parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+            
         os.remove(file_name)
         
     except Exception as e:
         bot.reply_to(message, f"❌ Произошла ошибка во время обработки лекции: {str(e)}")
 
-# Заглушка веб-сервера для бесплатного тарифа Render
+# Служебный веб-сервер для удержания бесплатного тарифа Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -71,9 +106,5 @@ def run_web_server():
     server.serve_forever()
 
 if __name__ == "__main__":
-    # Запуск веб-сервера в фоне для обмана Render
     threading.Thread(target=run_web_server, daemon=True).start()
-    # Запуск самого бота Telegram
     bot.infinity_polling()
-
-    
