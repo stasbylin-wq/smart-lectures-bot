@@ -3,17 +3,16 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
-import google.generativeai as genai
+from mistralai import Mistral
 
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
 TELEGRAM_TOKEN = "8825868450:AAGWSwOtKu2ZWWGpDzdVkoRNBnfMcFms0x4"
 GROQ_API_KEY = "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"
-GEMINI_API_KEY = "AQ.Ab8RN6LTHndhLop7DD2SFCl294X-g9BU5lVIKwddOcCtiF5-uw"
+MISTRAL_API_KEY = "fXu4rBD2v6iRNHbKTI6GrXuIQvFy7o9n"
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-
-# Классическая и стабильная конфигурация Google ИИ
-genai.configure(api_key=GEMINI_API_KEY)
+mistral_client = Mistral(api_key=MISTRAL_API_KEY)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -32,7 +31,7 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
-        # 🎙️ ЭТАП 1: Groq делает бесплатный перевод звука в текст
+        # 🎙️ ЭТАП 1: Groq Whisper переводит звук в текст
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
@@ -40,27 +39,30 @@ def handle_audio(message):
                 response_format="text"
             )
         
-        bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Google Gemini для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Mistral AI для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: Супер-стабильная модель Gemini 1.5 Flash делает конспект без лимитов
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(
-            f"Ты — professional студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, важные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции. Вот текст лекции:\n\n{transcription}"
+        # 🧠 ЭТАП 2: Флагманская Mistral Large делает подробнейший конспект без лимитов на вывод
+        response = mistral_client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, главные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции."},
+                {"role": "user", "content": f"Вот текст лекции:\n\n{transcription}"}
+            ]
         )
         
-        result_text = response.text
+        result_text = response.choices[0].message.content
         
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
         
-        # Разрезаем сообщение для Telegram, если конспект получился очень большим (лимит TG 4096 символов)
+        # Разрезаем сообщение для Telegram, если конспект получился очень большим
         if len(result_text) > 4000:
             for x in range(0, len(result_text), 4000):
                 bot.send_message(message.chat.id, result_text[x:x+4000])
         else:
-            bot.send_message(message.chat.id, f"📚 КОНСПЕКТ ЛЕКЦИИ 📚\n\n{result_text}")
+            bot.send_message(message.chat.id, f"📚 **ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n{result_text}")
             
         os.remove(file_name)
         
