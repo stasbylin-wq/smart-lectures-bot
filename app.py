@@ -2,7 +2,6 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
-from groq import Groq
 import requests
 
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
@@ -11,7 +10,6 @@ GROQ_API_KEY = "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"
 MISTRAL_API_KEY = "fXu4rBD2v6iRNHbKTI6GrXuIQvFy7o9n"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-groq_client = Groq(api_key=GROQ_API_KEY)
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -30,23 +28,32 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
-        # 🎙️ ЭТАП 1: Groq Whisper переводит звук в текст
+        # 🎙️ ЭТАП 1: Запрос к Groq Whisper НАПРЯМУЮ через requests (без библиотек!)
+        whisper_url = "https://groq.com"
+        whisper_headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+        
         with open(file_name, "rb") as audio_file:
-            transcription = groq_client.audio.transcriptions.create(
-                file=(file_name, audio_file.read()),
-                model="whisper-large-v3",
-                response_format="text"
-            )
+            whisper_files = {
+                "file": (file_name, audio_file.read(), "audio/mp3"),
+                "model": (None, "whisper-large-v3"),
+                "response_format": (None, "text")
+            }
+            whisper_response = requests.post(whisper_url, headers=whisper_headers, files=whisper_files)
+            
+        transcription = whisper_response.text.strip()
         
-        bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Mistral AI для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
+        if whisper_response.status_code != 200 or not transcription:
+            raise Exception(f"Ошибка Whisper: {whisper_response.text}")
+            
+        bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Mistral AI для создания конспекта...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: Запрос к Mistral напрямую через встроенную библиотеку requests без лимитов на вывод
-        url = "https://mistral.ai"
-        headers = {
+        # 🧠 ЭТАП 2: Запрос к Mistral AI НАПРЯМУЮ без лишних библиотек
+        mistral_url = "https://mistral.ai"
+        mistral_headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {MISTRAL_API_KEY}"
         }
-        data = {
+        mistral_data = {
             "model": "mistral-large-latest",
             "messages": [
                 {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой полная расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Выдели тему лекции, разбей текст на логические главы, главные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции."},
@@ -54,9 +61,9 @@ def handle_audio(message):
             ]
         }
         
-        response = requests.post(url, headers=headers, json=data)
-        response_json = response.json()
-        result_text = response_json["choices"][0]["message"]["content"]
+        mistral_response = requests.post(mistral_url, headers=mistral_headers, json=mistral_data)
+        mistral_json = mistral_response.json()
+        result_text = mistral_json["choices"][0]["message"]["content"]
         
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
@@ -68,7 +75,7 @@ def handle_audio(message):
             for x in range(0, len(result_text), 4000):
                 bot.send_message(message.chat.id, result_text[x:x+4000])
         else:
-            bot.send_message(message.chat.id, f"📚 КОНСПЕКТ ЛЕКЦИИ 📚\n\n{result_text}")
+            bot.send_message(message.chat.id, f"📚 **ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n{result_text}")
             
         os.remove(file_name)
         
@@ -90,4 +97,3 @@ def run_web_server():
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     bot.infinity_polling()
-    
