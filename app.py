@@ -32,7 +32,7 @@ def handle_audio(message):
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
-                model="whisper-large-v3",
+                model="groq/compound-mini",
                 response_format="text"
             )
         
