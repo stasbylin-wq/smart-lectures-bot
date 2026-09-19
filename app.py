@@ -5,6 +5,7 @@ import telebot
 from groq import Groq
 from mistralai import Mistral
 
+
 # 🔑 ВСТАВЬ СВОИ ДАННЫЕ ВНУТРЬ КАВЫЧЕК:
 TELEGRAM_TOKEN = "8825868450:AAGWSwOtKu2ZWWGpDzdVkoRNBnfMcFms0x4"
 GROQ_API_KEY = "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"
@@ -41,7 +42,7 @@ def handle_audio(message):
         
         bot.edit_message_text("✍️ Текст успешно распознан! Передаю данные в Mistral AI для создания гигантского конспекта без лимитов...", message.chat.id, status_msg.message_id)
         
-        # 🧠 ЭТАП 2: Флагманская Mistral Large делает подробнейший конспект без лимитов на вывод
+        # 🧠 ЭТАП 2: Мощная модель Mistral Large делает подробнейший конспект
         response = mistral_client.chat.complete(
             model="mistral-large-latest",
             messages=[
@@ -62,7 +63,7 @@ def handle_audio(message):
             for x in range(0, len(result_text), 4000):
                 bot.send_message(message.chat.id, result_text[x:x+4000])
         else:
-            bot.send_message(message.chat.id, f"📚 **ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n{result_text}")
+            bot.send_message(message.chat.id, f"📚 КОНСПЕКТ ЛЕКЦИИ 📚\n\n{result_text}")
             
         os.remove(file_name)
         
@@ -84,3 +85,4 @@ def run_web_server():
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     bot.infinity_polling()
+    
