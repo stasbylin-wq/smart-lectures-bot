@@ -1,6 +1,7 @@
 
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
@@ -11,6 +12,25 @@ GROQ_API_KEY = "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"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+def split_text_by_tokens(text, max_chars=5500):
+    """Функция автоматической нарезки текста лекции на безопасные куски для обхода лимита 7000 ITPM"""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for word in words:
+        # Примерный подсчет: 1 слово ~ 1.3 токена. 5500 символов гарантированно уложатся в лимит.
+        if current_length + len(word) + 1 > max_chars:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word)
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    return chunks
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -36,26 +56,44 @@ def handle_audio(message):
                 response_format="text"
             )
         
-        bot.edit_message_text("✍️ Речь успешно переведена в текст! Нейросеть формирует емкий конспект, укладываясь в лимиты...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Речь успешно переведена в текст! Обхожу минутные лимиты Qwen и формирую конспект...", message.chat.id, status_msg.message_id)
         
-        completion = groq_client.chat.completions.create(
-            model="qwen/qwen3.8-27b",
-            messages=[
-                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект на русском языке. СТРОГО ЗАПРЕЩЕНО писать длинные тексты и лить воду. Твой итоговый ответ должен быть объемом НЕ БОЛЕЕ 3000 символов. Выдели тему лекции, разбей текст на короткие логические главы, главные термины выдели жирным шрифтом, а важные списки оформи короткими буллитами. Уложись в этот лимит при любых обстоятельствах!"},
-                {"role": "user", "content": f"Вот текст лекции для сжатого конспекта:\n\n{transcription}"}
-            ]
-        )
+        # Нарезаем огромный текст лекции на куски, которые гарантированно меньше 7000 токенов
+        text_chunks = split_text_by_tokens(transcription, max_chars=5500)
+        final_notes = []
         
-        result_text = completion.choices.message.content
+        for i, chunk in enumerate(text_chunks):
+            # Отправляем кусочки лекции по очереди в Qwen
+            completion = groq_client.chat.completions.create(
+                model="qwen/qwen3.8-27b",
+                messages=[
+                    {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой часть расшифровки учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект этого фрагмента на русском языке. Убирай воду, повторы и слова-паразиты лектора. Главные термины и определения выдели жирным шрифтом, а важные списки оформи короткими буллитами."},
+                    {"role": "user", "content": f"Вот фрагмент №{i+1} для конспектирования:\n\n{chunk}"}
+                ]
+            )
+            final_notes.append(completion.choices.message.content)
+            # Делаем паузу 5 секунд между кусками, чтобы бесплатный минутный лимит (ITPM) гарантированно обнулился
+            if i < len(text_chunks) - 1:
+                time.sleep(5)
+            
+        # Красиво склеиваем все части конспекта в один единый документ
+        result_text = f"📚 **ИДЕАЛЬНЫЙ ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n" + "\n\n".join(final_notes)
         
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+        
+        # Если финальный конспект получился гигантским, бьем его по лимитам сообщений самого Telegram (4096 символов)
+        if len(result_text) > 4000:
+            for x in range(0, len(result_text), 4000):
+                bot.send_message(message.chat.id, result_text[x:x+4000], parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+            
         os.remove(file_name)
         
     except Exception as e:
         bot.reply_to(message, f"❌ Произошла ошибка во время обработки лекции: {str(e)}")
 
-# Заглушка веб-сервера для бесплатного тарифа Render
+# Служебный веб-сервер для удержания бесплатного тарифа Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -71,3 +109,4 @@ def run_web_server():
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     bot.infinity_polling()
+
