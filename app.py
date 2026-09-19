@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
@@ -12,6 +13,24 @@ MISTRAL_API_KEY = "fXu4rBD2v6iRNHbKTI6GrXuIQvFy7o9n"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+def split_text_by_words(text, max_chars=4000):
+    """Функция нарезки текста лекции на безопасные куски для обхода лимитов Groq"""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for word in words:
+        if current_length + len(word) + 1 > max_chars:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word)
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    return chunks
 
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
@@ -30,6 +49,7 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
+        # 1. Whisper переводит ВСЕ 1.5 ЧАСА в текст целиком
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
@@ -37,27 +57,41 @@ def handle_audio(message):
                 response_format="text"
             )
         
-        bot.edit_message_text("✍️ Речь успешно переведена в текст! Нейросеть формирует красивый конспект...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Речь успешно переведена в текст! Обхожу минутные лимиты и формирую конспект...", message.chat.id, status_msg.message_id)
         
-        # 🔥 УМНАЯ ЗАЩИТА: Берем первые 5000 символов текста лекции, чтобы гарантированно уложиться в лимиты бесплатного тарифа
-        safe_transcription = transcription[:5000]
+        # 2. Вместо обрезки — режем текст на куски по 4000 символов в памяти
+        text_chunks = split_text_by_words(transcription, max_chars=4000)
+        final_notes = []
         
-        completion = groq_client.chat.completions.create(
-            model="groq/compound",
-            messages=[
-                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект на русском языке. СТРОГО ЗАПРЕЩЕНО писать длинные тексты и лить воду. Твой итоговый ответ должен быть объемом НЕ БОЛЕЕ 3000 символов. Выдели тему лекции, разбей текст на короткие логические главы, главные термины выдели жирным шрифтом, а важные списки оформи буллитами. Уложись в этот лимит при любых обстоятельствах!"},
-                {"role": "user", "content": f"Вот текст лекции для сжатого конспекта:\n\n{safe_transcription}"}
-            ]
-        )
+        for i, chunk in enumerate(text_chunks):
+            # Отправляем кусочки лекции по очереди в стабильную модель groq/compound
+            completion = groq_client.chat.completions.create(
+                model="groq/compound",
+                messages=[
+                    {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой фрагмент расшифровки учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект этой части на русском языке. Убирай воду, повторы и слова-паразиты лектора. Главные термины выдели жирным шрифтом, а важные тезисы оформи короткими буллитами."},
+                    {"role": "user", "content": f"Сделай конспект фрагмента №{i+1}:\n\n{chunk}"}
+                ]
+            )
+            final_notes.append(completion.choices.message.content)
+            # Пауза 4 секунды между кусками, чтобы бесплатный лимит (TPM) гарантированно успевал обнуляться
+            if i < len(text_chunks) - 1:
+                time.sleep(4)
         
-        result_text = completion.choices.message.content
+        # Склеиваем все части в один монолитный конспект лекции
+        result_text = f"📚 **ИДЕАЛЬНЫЙ ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n" + "\n\n".join(final_notes)
         
         try:
             bot.delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
             
-        bot.send_message(message.chat.id, f"📚 **КОНСПЕКТ ЛЕКЦИИ (ТЕСТОВЫЙ ФРАГМЕНТ)** 📚\n\n{result_text}", parse_mode="Markdown")
+        # Защита от лимита самого Telegram на длину одного сообщения
+        if len(result_text) > 4000:
+            for x in range(0, len(result_text), 4000):
+                bot.send_message(message.chat.id, result_text[x:x+4000], parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+            
         os.remove(file_name)
         
     except Exception as e:
