@@ -110,5 +110,13 @@ def run_web_server():
     server.serve_forever()
 
 if __name__ == "__main__":
+    # 💥 ЖЕЛЕЗОБЕТОННЫЙ СБРОС: Принудительно очищаем зависшие вебхуки Telegram при старте
+    try:
+        bot.remove_webhook()
+    except:
+        pass
+        
+    threading.Thread(target=run_web_server, daemon=True).start()
+    bot.infinity_polling()
     threading.Thread(target=run_web_server, daemon=True).start()
     bot.infinity_polling()
