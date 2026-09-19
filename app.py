@@ -75,7 +75,7 @@ def handle_audio(message):
             final_notes.append(completion.choices[0].message.content)
             # Пауза 4 секунды между кусками, чтобы бесплатный лимит (TPM) гарантированно успевал обнуляться
             if i < len(text_chunks) - 1:
-                time.sleep(10)
+                time.sleep(60)
         
         # Склеиваем все части в один монолитный конспект лекции
         result_text = f"📚 **ИДЕАЛЬНЫЙ ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n" + "\n\n".join(final_notes)
