@@ -46,7 +46,7 @@ def handle_audio(message):
             ]
         )
         
-        result_text = completion.choices.message.content
+        result_text = completion.choices[0].message.content
         bot.delete_message(message.chat.id, status_msg.message_id)
         bot.send_message(message.chat.id, result_text, parse_mode="HTML")
         os.remove(file_name)
