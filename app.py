@@ -84,7 +84,14 @@ def handle_audio(message):
             bot.delete_message(message.chat.id, status_msg.message_id)
         except:
             pass
-            
+                    # Разрезаем сообщение для Telegram с паузой, чтобы избежать блокировок Flood Control
+        if len(result_text) > 4000:
+            for x in range(0, len(result_text), 4000):
+                bot.send_message(message.chat.id, result_text[x:x+4000], parse_mode="Markdown")
+                time.sleep(2)  # 🎯 ПАУЗА 2 СЕКУНДЫ, ЧТОБЫ ТЕЛЕГРАМ НЕ БЛОКИРОВАЛ БОТА ЗА СПАМ
+        else:
+            bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+
         # Защита от лимита самого Telegram на длину одного сообщения
         if len(result_text) > 4000:
             for x in range(0, len(result_text), 4000):
