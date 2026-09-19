@@ -59,7 +59,7 @@ def handle_audio(message):
             "Authorization": f"Bearer {MISTRAL_API_KEY}"
         }
         mistral_data = {
-            "model": "mistral-large-latest",
+            "model": "mistral-small-latest",
             "messages": [
                 {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать подробный, красивый, структурированный конспект на русском языке. Выдели тему лекции, разбей текст на логические главы, важные термины выдели жирным шрифтом, а списки оформи буллитами."},
                 {"role": "user", "content": f"Вот текст лекции:\n\n{transcription}"}
