@@ -1,7 +1,8 @@
 
-
 import os
 import threading
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
 from groq import Groq
 
@@ -12,11 +13,29 @@ GROQ_API_KEY = "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"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+def split_text_by_tokens(text, max_chars=5500):
+    """Функция автоматической нарезки текста лекции на безопасные куски для обхода лимита 7000 ITPM"""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+    current_length = 0
+    for word in words:
+        if current_length + len(word) + 1 > max_chars:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [word]
+            current_length = len(word)
+        else:
+            current_chunk.append(word)
+            current_length += len(word) + 1
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+    return chunks
+
 @bot.message_handler(content_types=['audio', 'voice', 'document'])
 def handle_audio(message):
     try:
-        # Отправляем простое текстовое сообщение
-        status_msg = bot.send_message(message.chat.id, "⏳ Аудио получено! Начинаю расшифровку и создание конспекта, пожалуйста, подождите...")
+        # Отправляем чистое текстовое уведомление, чтобы не было багов с ответами
+        status_msg = bot.send_message(message.chat.id, "⏳ Файл лекции успешно получен! Начинаю расшифровку и создание конспекта, пожалуйста, подождите...")
         
         file_id = None
         if message.content_type == 'audio': file_id = message.audio.file_id
@@ -30,7 +49,6 @@ def handle_audio(message):
         with open(file_name, 'wb') as new_file:
             new_file.write(downloaded_file)
             
-        # Расшифровка речи через Whisper
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
@@ -38,26 +56,44 @@ def handle_audio(message):
                 response_format="text"
             )
         
-        # Создание конспекта через ОФИЦИАЛЬНЫЙ ФЛАГМАН С ГИГАНТСКИМИ ЛИМИТАМИ
-        completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать красивый, емкий, структурированный конспект на русском языке. Очисти текст от заиканий лектора и воды. Разбей конспект на логические главы, важные термины выдели жирным шрифтом, а списки оформи короткими буллитами. В самом конце добавь краткое резюме (Summary)."},
-                {"role": "user", "content": f"Вот текст лекции:\n\n{transcription}"}
-            ]
-        )
+        # Нарезаем огромный текст лекции на куски, которые гарантированно меньше 7000 токенов
+        text_chunks = split_text_by_tokens(transcription, max_chars=5500)
+        final_notes = []
         
-        result_text = completion.choices[0].message.content
+        for i, chunk in enumerate(text_chunks):
+            completion = groq_client.chat.completions.create(
+                model="qwen/qwen3.8-27b",
+                messages=[
+                    {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой часть расшифровки учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект этого фрагмента на русском языке. Убирай воду, повторы и слова-паразиты лектора. Главные термины и определения выдели жирным шрифтом, а важные списки оформи короткими буллитами."},
+                    {"role": "user", "content": f"Вот фрагмент №{i+1} для конспектирования:\n\n{chunk}"}
+                ]
+            )
+            final_notes.append(completion.choices.message.content)
+            # Делаем паузу 5 секунд между кусками, чтобы бесплатный лимит обнулялся
+            if i < len(text_chunks) - 1:
+                time.sleep(5)
+            
+        result_text = f"📚 **ИДЕАЛЬНЫЙ ЦЕЛЬНЫЙ КОНСПЕКТ ЛЕКЦИИ** 📚\n\n" + "\n\n".join(final_notes)
         
-        # Удаляем техническое сообщение и присылаем чистый конспект лекции одним монолитом
-        bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, f"📚 **КОНСПЕКТ ЛЕКЦИИ** 📚\n\n{result_text}", parse_mode="Markdown")
+        # Безопасно удаляем техническое сообщение
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except:
+            pass
+            
+        # Отправляем готовый конспект
+        if len(result_text) > 4000:
+            for x in range(0, len(result_text), 4000):
+                bot.send_message(message.chat.id, result_text[x:x+4000], parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
+            
         os.remove(file_name)
         
     except Exception as e:
         bot.reply_to(message, f"❌ Произошла ошибка во время обработки лекции: {str(e)}")
 
-# Заглушка веб-сервера для удержания бесплатного тарифа Render
+# Служебный веб-сервер для удержания бесплатного тарифа Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -66,7 +102,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive!")
 
 def run_web_server():
-    from http.server import HTTPServer
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
@@ -74,3 +109,4 @@ def run_web_server():
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     bot.infinity_polling()
+
