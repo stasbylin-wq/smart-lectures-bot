@@ -69,7 +69,7 @@ def handle_audio(message):
                     {"role": "user", "content": f"Вот фрагмент №{i+1} для конспектирования:\n\n{chunk}"}
                 ]
             )
-            final_notes.append(completion.choices.message.content)
+            final_notes.append(completion.choices[0].message.content)
             # Делаем паузу 5 секунд между кусками, чтобы бесплатный лимит обнулялся
             if i < len(text_chunks) - 1:
                 time.sleep(5)
