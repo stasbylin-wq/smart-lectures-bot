@@ -32,23 +32,26 @@ def handle_audio(message):
         with open(file_name, "rb") as audio_file:
             transcription = groq_client.audio.transcriptions.create(
                 file=(file_name, audio_file.read()),
-                model="llama-3.1-70b-versatile",
+                model="whisper-large-v3",
                 response_format="text"
             )
         
-        bot.edit_message_text("✍️ Речь успешно переведена в текст! Передаю данные мощной нейросети для создания красивого конспекта...", message.chat.id, status_msg.message_id)
+        bot.edit_message_text("✍️ Речь успешно переведена в текст! Нейросеть формирует емкий конспект, укладываясь в лимиты...", message.chat.id, status_msg.message_id)
         
+        # Модель groq/compound с твоей жесткой инструкцией сжатия текста
         completion = groq_client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+            model="groq/compound",
             messages=[
-                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — очистить текст от мусора, заиканий и пауз лектора. Сделай красивый, структурированный конспект на русском языке: выдели тему лекции, разбей текст на логические главы, главные термины выдели жирным шрифтом, важные списки оформи буллитами, а в самом конце добавь краткое резюме (Summary) всей лекции."},
-                {"role": "user", "content": f"Вот текст лекции для конспекта:\n\n{transcription}"}
+                {"role": "system", "content": "Ты — профессиональный студенческий ассистент. Перед тобой расшифровка учебной лекции. Твоя задача — сделать КРАТКИЙ, ЕМКИЙ и СЖАТЫЙ конспект на русском языке. СТРОГО ЗАПРЕЩЕНО писать длинные тексты и лить воду. Твой итоговый ответ должен быть объемом НЕ БОЛЕЕ 3000 символов. Выдели тему лекции, разбей текст на короткие логические главы, главные термины выдели жирным шрифтом, а важные списки оформи короткими буллитами. Уложись в этот лимит при любых обстоятельствах!"},
+                {"role": "user", "content": f"Вот текст лекции для сжатого конспекта:\n\n{transcription}"}
             ]
         )
         
+        # Исправленный синтаксис получения ответа Groq
         result_text = completion.choices[0].message.content
+        
         bot.delete_message(message.chat.id, status_msg.message_id)
-        bot.send_message(message.chat.id, result_text, parse_mode="HTML")
+        bot.send_message(message.chat.id, result_text, parse_mode="Markdown")
         os.remove(file_name)
         
     except Exception as e:
@@ -67,8 +70,10 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# Запуск веб-сервера и бота в разных потоках
 if __name__ == "__main__":
+    # Запуск веб-сервера в фоне для обмана Render
     threading.Thread(target=run_web_server, daemon=True).start()
+    # Запуск самого бота Telegram
     bot.infinity_polling()
+
     
